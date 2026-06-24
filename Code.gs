@@ -13,7 +13,7 @@ const CONFIG = {
 // ── MENU SETUP ────────────────────────────────────────────────────────────────
 function onOpen() {
   SpreadsheetApp.getUi()
-    .createMenu('📤 Pabbly Sync')
+    .createMenu('📤 Webhook Sync')
     .addItem('▶️ Start Processing', 'startProcessing')
     .addItem('⛔ Stop Processing', 'stopProcessing')
     .addItem('📊 Check Status', 'checkStatus')
