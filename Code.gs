@@ -3,11 +3,14 @@ const CONFIG = {
   LOG_SHEET_NAME: 'WebhookLogs',
   TEMP_SHEET_NAME: '_PabblyTemp',
   START_ROW_KEY: 'lastProcessedRow',
+  END_ROW_KEY: 'endRow',
   IS_RUNNING_KEY: 'isRunning',
   SHEET_NAME_KEY: 'sheetName',
   WEBHOOK_URL_KEY: 'webhookUrl',
   INTERVAL_KEY: 'triggerInterval',
-  BATCH_SIZE_KEY: 'batchSize'
+  BATCH_SIZE_KEY: 'batchSize',
+  CUSTOM_START_ROW_KEY: 'customStartRow',
+  CUSTOM_END_ROW_KEY: 'customEndRow'
 };
 
 // ── MENU SETUP ────────────────────────────────────────────────────────────────
@@ -35,22 +38,24 @@ function getTempSheet() {
   return sheet;
 }
 
-function writeTempSettings(sheetName, webhookUrl, batchSize, interval) {
+function writeTempSettings(sheetName, webhookUrl, batchSize, interval, customStartRow, customEndRow) {
   const sheet = getTempSheet();
   sheet.clearContents();
-  sheet.getRange('A1:D1').setValues([[sheetName, webhookUrl, batchSize, interval]]);
+  sheet.getRange('A1:F1').setValues([[sheetName, webhookUrl, batchSize, interval, customStartRow, customEndRow]]);
 }
 
 function readAndApplyTempSettings() {
   try {
     const sheet = getTempSheet();
-    const values = sheet.getRange('A1:D1').getValues()[0];
+    const values = sheet.getRange('A1:F1').getValues()[0];
     if (!values[0]) return false;
     const props = PropertiesService.getScriptProperties();
     props.setProperty(CONFIG.SHEET_NAME_KEY, values[0].toString());
     props.setProperty(CONFIG.WEBHOOK_URL_KEY, values[1].toString());
     props.setProperty(CONFIG.BATCH_SIZE_KEY, values[2].toString());
     props.setProperty(CONFIG.INTERVAL_KEY, values[3].toString());
+    props.setProperty(CONFIG.CUSTOM_START_ROW_KEY, values[4].toString());
+    props.setProperty(CONFIG.CUSTOM_END_ROW_KEY, values[5].toString());
     sheet.clearContents();
     return true;
   } catch(e) {
@@ -65,16 +70,18 @@ function promptSettings() {
     sheetName: props.getProperty(CONFIG.SHEET_NAME_KEY) || '',
     webhookUrl: props.getProperty(CONFIG.WEBHOOK_URL_KEY) || '',
     batchSize: props.getProperty(CONFIG.BATCH_SIZE_KEY) || '100',
-    interval: props.getProperty(CONFIG.INTERVAL_KEY) || '5'
+    interval: props.getProperty(CONFIG.INTERVAL_KEY) || '5',
+    customStartRow: props.getProperty(CONFIG.CUSTOM_START_ROW_KEY) || '',
+    customEndRow: props.getProperty(CONFIG.CUSTOM_END_ROW_KEY) || ''
   };
   const template = HtmlService.createTemplateFromFile('Settings');
   template.current = JSON.stringify(current);
-  const html = template.evaluate().setWidth(420).setHeight(460);
-  SpreadsheetApp.getUi().showModalDialog(html, '⚙️ Pabbly Sync Settings');
+  const html = template.evaluate().setWidth(420).setHeight(560);
+  SpreadsheetApp.getUi().showModalDialog(html, '⚙️ Webhook Sync Settings');
 }
 
-function saveSettingsFromDialog(sheetName, webhookUrl, batchSize, interval) {
-  writeTempSettings(sheetName, webhookUrl, batchSize, interval);
+function saveSettingsFromDialog(sheetName, webhookUrl, batchSize, interval, customStartRow, customEndRow) {
+  writeTempSettings(sheetName, webhookUrl, batchSize, interval, customStartRow, customEndRow);
 }
 
 function applyPendingSettings() {
@@ -104,21 +111,31 @@ function startProcessing() {
     return;
   }
 
-  props.setProperty(CONFIG.START_ROW_KEY, '2');
+  const dataSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  const totalRows = dataSheet.getLastRow();
+
+  const customStartRow = parseInt(props.getProperty(CONFIG.CUSTOM_START_ROW_KEY) || '') || 2;
+  const customEndRow = parseInt(props.getProperty(CONFIG.CUSTOM_END_ROW_KEY) || '') || totalRows;
+
+  const startRow = Math.max(2, customStartRow);
+  const endRow = Math.min(totalRows, customEndRow);
+
+  props.setProperty(CONFIG.START_ROW_KEY, startRow.toString());
+  props.setProperty(CONFIG.END_ROW_KEY, endRow.toString());
   props.setProperty(CONFIG.IS_RUNNING_KEY, 'true');
 
   processSingleBatch();
   setupTrigger();
 
-  const totalRows = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName).getLastRow() - 1;
-  const totalBatches = Math.ceil(totalRows / parseInt(batchSize));
+  const totalRowsInRange = endRow - startRow + 1;
+  const totalBatches = Math.ceil(totalRowsInRange / parseInt(batchSize));
   const actualInterval = getValidInterval(parseInt(interval));
   const totalMinutes = totalBatches * actualInterval;
   const totalHours = (totalMinutes / 60).toFixed(1);
 
   ui.alert(
     '✅ Started!',
-    `Batch size: ${batchSize} rows\nInterval: every ${actualInterval} min\n\nTotal rows: ${totalRows}\nTotal batches: ${totalBatches}\nEst. total time: ${totalMinutes} min (~${totalHours} hrs)`,
+    `Range: rows ${startRow}–${endRow}\nBatch size: ${batchSize} rows\nInterval: every ${actualInterval} min\n\nTotal rows: ${totalRowsInRange}\nTotal batches: ${totalBatches}\nEst. total time: ${totalMinutes} min (~${totalHours} hrs)`,
     ui.ButtonSet.OK
   );
 }
@@ -137,20 +154,21 @@ function processSingleBatch() {
   const batchSize = parseInt(props.getProperty(CONFIG.BATCH_SIZE_KEY) || '100');
   const dataSheet = ss.getSheetByName(sheetName);
   const logSheet = getOrCreateLogSheet(ss);
-  const totalRows = dataSheet.getLastRow();
   const totalCols = dataSheet.getLastColumn();
   const headers = dataSheet.getRange(1, 1, 1, totalCols).getValues()[0];
   const currentRow = parseInt(props.getProperty(CONFIG.START_ROW_KEY) || '2');
+  const endRow = parseInt(props.getProperty(CONFIG.END_ROW_KEY) || dataSheet.getLastRow().toString());
 
-  if (currentRow > totalRows) {
+  if (currentRow > endRow) {
     logResponse(logSheet, -1, -1, 0, { status: 'COMPLETE', message: 'All rows processed successfully' });
     deleteTrigger();
     props.setProperty(CONFIG.IS_RUNNING_KEY, 'false');
     props.deleteProperty(CONFIG.START_ROW_KEY);
+    props.deleteProperty(CONFIG.END_ROW_KEY);
     return;
   }
 
-  const rowsToRead = Math.min(batchSize, totalRows - currentRow + 1);
+  const rowsToRead = Math.min(batchSize, endRow - currentRow + 1);
   const rawValues = dataSheet.getRange(currentRow, 1, rowsToRead, totalCols).getValues();
 
   const data = rawValues.map((row, i) => {
@@ -188,26 +206,32 @@ function sendTestBatch() {
     return;
   }
 
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const dataSheet = ss.getSheetByName(sheetName);
+  const totalRows = dataSheet.getLastRow();
+
+  const customStartRow = parseInt(props.getProperty(CONFIG.CUSTOM_START_ROW_KEY) || '') || 2;
+  const customEndRow = parseInt(props.getProperty(CONFIG.CUSTOM_END_ROW_KEY) || '') || totalRows;
+  const startRow = Math.max(2, customStartRow);
+  const endRow = Math.min(totalRows, customEndRow);
+
   const confirm = ui.alert(
     '🧪 Send Test Batch?',
-    `This will send the first ${batchSize} rows from "${sheetName}" to your webhook.\n\nThis does NOT affect main processing progress.\n\nProceed?`,
+    `This will send the first ${batchSize} rows from "${sheetName}" (rows ${startRow}–${endRow}) to your webhook.\n\nThis does NOT affect main processing progress.\n\nProceed?`,
     ui.ButtonSet.YES_NO
   );
   if (confirm !== ui.Button.YES) return;
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const dataSheet = ss.getSheetByName(sheetName);
-  const totalRows = dataSheet.getLastRow();
   const totalCols = dataSheet.getLastColumn();
   const headers = dataSheet.getRange(1, 1, 1, totalCols).getValues()[0];
 
   if (totalRows < 2) { ui.alert('❌ No data found in the sheet.'); return; }
 
-  const rowsToRead = Math.min(batchSize, totalRows - 1);
-  const rawValues = dataSheet.getRange(2, 1, rowsToRead, totalCols).getValues();
+  const rowsToRead = Math.min(batchSize, endRow - startRow + 1);
+  const rawValues = dataSheet.getRange(startRow, 1, rowsToRead, totalCols).getValues();
 
   const data = rawValues.map((row, i) => {
-    const obj = { row_number: 2 + i };
+    const obj = { row_number: startRow + i };
     headers.forEach((header, j) => {
       obj[header || `column_${j + 1}`] = row[j];
     });
@@ -216,7 +240,7 @@ function sendTestBatch() {
 
   if (data.length === 0) { ui.alert('❌ No valid data found.'); return; }
 
-  const result = sendToPabbly(data, 2, true);
+  const result = sendToPabbly(data, startRow, true);
 
   getOrCreateLogSheet(ss).appendRow([
     new Date().toISOString(),
@@ -265,19 +289,25 @@ function checkStatus() {
   const webhookUrl = props.getProperty(CONFIG.WEBHOOK_URL_KEY);
   const interval = parseInt(props.getProperty(CONFIG.INTERVAL_KEY) || '5');
   const batchSize = parseInt(props.getProperty(CONFIG.BATCH_SIZE_KEY) || '100');
+  const customStartRow = parseInt(props.getProperty(CONFIG.CUSTOM_START_ROW_KEY) || '') || 2;
   const dataSheet = sheetName ? SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName) : null;
   const totalRows = dataSheet ? dataSheet.getLastRow() : 0;
+  const customEndRow = parseInt(props.getProperty(CONFIG.CUSTOM_END_ROW_KEY) || '') || totalRows;
 
-  const rowsDone = currentRow - 2;
+  const endRow = props.getProperty(CONFIG.END_ROW_KEY) ? parseInt(props.getProperty(CONFIG.END_ROW_KEY)) : customEndRow;
+  const rowsDone = currentRow - customStartRow;
+  const totalRowsInRange = endRow - customStartRow + 1;
   const batchesDone = Math.floor(rowsDone / batchSize);
-  const batchesLeft = Math.ceil((totalRows - currentRow + 1) / batchSize);
+  const batchesLeft = Math.ceil((endRow - currentRow + 1) / batchSize);
   const actualInterval = getValidInterval(interval);
   const minutesLeft = batchesLeft * actualInterval;
   const hoursLeft = (minutesLeft / 60).toFixed(1);
 
+  const rangeLabel = `rows ${customStartRow}–${customEndRow || 'last'}`;
+
   const message = isRunning
-    ? `🟢 Running\n\nRows sent: ${rowsDone} / ${totalRows - 1}\nBatches done: ${batchesDone}\nBatches remaining: ${batchesLeft}\nEst. time left: ${minutesLeft} min (~${hoursLeft} hrs)\n\n⚙️ Sheet: ${sheetName}\nBatch size: ${batchSize}\nInterval: every ${actualInterval} min\nWebhook: ...${webhookUrl ? webhookUrl.slice(-30) : 'Not set'}`
-    : `🔴 Not running\nLast row processed: ${currentRow - 1 || 'N/A'}\n\n⚙️ Sheet: ${sheetName || 'Not set'}\nBatch size: ${batchSize}\nInterval: ${actualInterval ? `every ${actualInterval} min` : 'Not set'}\nWebhook: ...${webhookUrl ? webhookUrl.slice(-30) : 'Not set'}`;
+    ? `🟢 Running\n\nRange: ${rangeLabel}\nRows sent: ${rowsDone} / ${totalRowsInRange}\nBatches done: ${batchesDone}\nBatches remaining: ${batchesLeft}\nEst. time left: ${minutesLeft} min (~${hoursLeft} hrs)\n\n⚙️ Sheet: ${sheetName}\nBatch size: ${batchSize}\nInterval: every ${actualInterval} min\nWebhook: ...${webhookUrl ? webhookUrl.slice(-30) : 'Not set'}`
+    : `🔴 Not running\nLast row processed: ${currentRow - 1 || 'N/A'}\nConfigured range: ${rangeLabel}\n\n⚙️ Sheet: ${sheetName || 'Not set'}\nBatch size: ${batchSize}\nInterval: ${actualInterval ? `every ${actualInterval} min` : 'Not set'}\nWebhook: ...${webhookUrl ? webhookUrl.slice(-30) : 'Not set'}`;
 
   SpreadsheetApp.getUi().alert('📊 Pabbly Sync Status', message, SpreadsheetApp.getUi().ButtonSet.OK);
 }
