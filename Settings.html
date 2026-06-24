@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+      body { padding: 24px; background: #f8f9fa; }
+      h2 { font-size: 16px; color: #1a73e8; margin-bottom: 20px; }
+      .field { margin-bottom: 16px; }
+      label { display: block; font-size: 12px; font-weight: bold; color: #444; margin-bottom: 4px; }
+      input { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+      input:focus { outline: none; border-color: #1a73e8; }
+      .hint { font-size: 11px; color: #888; margin-top: 3px; }
+      .error { font-size: 11px; color: #d93025; margin-top: 3px; display: none; }
+      .buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+      button { padding: 8px 20px; border-radius: 4px; font-size: 13px; cursor: pointer; border: none; }
+      .cancel { background: #fff; border: 1px solid #ccc; color: #444; }
+      .save { background: #1a73e8; color: #fff; }
+      .save:hover { background: #1557b0; }
+      .cancel:hover { background: #f1f3f4; }
+      .disabled { opacity: 0.6; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <h2>⚙️ Pabbly Sync Settings</h2>
+
+    <div class="field">
+      <label>Sheet Name</label>
+      <input type="text" id="sheetName" placeholder="e.g. Contacts" />
+      <div class="hint">Name of the sheet containing your data in column A</div>
+      <div class="error" id="sheetNameErr"></div>
+    </div>
+
+    <div class="field">
+      <label>Pabbly Webhook URL</label>
+      <input type="text" id="webhookUrl" placeholder="https://connect.pabbly.com/workflow/..." />
+      <div class="error" id="webhookUrlErr"></div>
+    </div>
+
+    <div class="field">
+      <label>Batch Size</label>
+      <input type="number" id="batchSize" placeholder="100" min="1" max="500" />
+      <div class="hint">Number of rows per batch (1–500, recommended: 100)</div>
+      <div class="error" id="batchSizeErr"></div>
+    </div>
+
+    <div class="field">
+      <label>Interval Between Batches (minutes)</label>
+      <input type="number" id="interval" placeholder="5" min="1" />
+      <div class="hint">Supported values: 1, 5, 10, 15, 30</div>
+      <div class="error" id="intervalErr"></div>
+    </div>
+
+    <div class="buttons">
+      <button class="cancel" onclick="google.script.host.close()">Cancel</button>
+      <button class="save" id="saveBtn" onclick="validateAndSave()">Save Settings</button>
+    </div>
+
+    <script>
+      // Prefill from injected GS template variable - zero network calls
+      window.onload = function () {
+        try {
+          const current = JSON.parse('<?= current ?>');
+          if (current.sheetName) document.getElementById('sheetName').value = current.sheetName;
+          if (current.webhookUrl) document.getElementById('webhookUrl').value = current.webhookUrl;
+          if (current.batchSize) document.getElementById('batchSize').value = current.batchSize;
+          if (current.interval) document.getElementById('interval').value = current.interval;
+        } catch(e) {}
+      };
+
+      function showError(id, msg) {
+        const el = document.getElementById(id);
+        el.textContent = msg;
+        el.style.display = 'block';
+      }
+
+      function clearErrors() {
+        ['sheetNameErr', 'webhookUrlErr', 'batchSizeErr', 'intervalErr']
+          .forEach(id => { document.getElementById(id).style.display = 'none'; });
+      }
+
+      function validateAndSave() {
+        clearErrors();
+        let valid = true;
+
+        const sheetName = document.getElementById('sheetName').value.trim();
+        const webhookUrl = document.getElementById('webhookUrl').value.trim();
+        const batchSize = parseInt(document.getElementById('batchSize').value);
+        const interval = parseInt(document.getElementById('interval').value);
+
+        if (!sheetName) { showError('sheetNameErr', '❌ Sheet name is required.'); valid = false; }
+        if (!webhookUrl || !webhookUrl.startsWith('http')) { showError('webhookUrlErr', '❌ Enter a valid webhook URL starting with http.'); valid = false; }
+        if (isNaN(batchSize) || batchSize < 1 || batchSize > 500) { showError('batchSizeErr', '❌ Enter a number between 1 and 500.'); valid = false; }
+        if (isNaN(interval) || interval < 1) { showError('intervalErr', '❌ Enter a valid interval (minimum 1).'); valid = false; }
+        if (!valid) return;
+
+        const validIntervals = [1, 5, 10, 15, 30];
+        if (!validIntervals.includes(interval)) {
+          const rounded = validIntervals.find(v => v >= interval) || 5;
+          if (!confirm(`⚠️ Apps Script only supports: 1, 5, 10, 15, 30 min.\n"${interval}" will be rounded up to ${rounded} min. Continue?`)) return;
+        }
+
+        const saveBtn = document.getElementById('saveBtn');
+        saveBtn.textContent = 'Saving...';
+        saveBtn.classList.add('disabled');
+
+        google.script.run
+          .withSuccessHandler(function () {
+            google.script.run
+              .withSuccessHandler(function () {
+                google.script.host.close();
+              })
+              .withFailureHandler(function (err) {
+                showError('sheetNameErr', '❌ ' + err.message);
+                saveBtn.textContent = 'Save Settings';
+                saveBtn.classList.remove('disabled');
+              })
+              .applyPendingSettings();
+          })
+          .withFailureHandler(function (err) {
+            showError('sheetNameErr', '❌ ' + err.message);
+            saveBtn.textContent = 'Save Settings';
+            saveBtn.classList.remove('disabled');
+          })
+          .saveSettingsFromDialog(sheetName, webhookUrl, batchSize, interval);
+      }
+    </script>
+  </body>
+</html>
