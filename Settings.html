@@ -7,9 +7,12 @@
       h2 { font-size: 16px; color: #1a73e8; margin-bottom: 20px; }
       .field { margin-bottom: 16px; }
       label { display: block; font-size: 12px; font-weight: bold; color: #444; margin-bottom: 4px; }
+      .row2 { display: flex; gap: 12px; }
+      .row2 .field { flex: 1; }
       input { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
       input:focus { outline: none; border-color: #1a73e8; }
       .hint { font-size: 11px; color: #888; margin-top: 3px; }
+      .optional { font-size: 10px; color: #aaa; font-weight: normal; margin-left: 4px; }
       .error { font-size: 11px; color: #d93025; margin-top: 3px; display: none; }
       .buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
       button { padding: 8px 20px; border-radius: 4px; font-size: 13px; cursor: pointer; border: none; }
@@ -26,7 +29,7 @@
     <div class="field">
       <label>Sheet Name</label>
       <input type="text" id="sheetName" placeholder="e.g. Contacts" />
-      <div class="hint">Name of the sheet containing your data in column A</div>
+      <div class="hint">Name of the sheet containing your data</div>
       <div class="error" id="sheetNameErr"></div>
     </div>
 
@@ -50,13 +53,27 @@
       <div class="error" id="intervalErr"></div>
     </div>
 
+    <div class="row2">
+      <div class="field">
+        <label>Start Row <span class="optional">(optional)</span></label>
+        <input type="number" id="customStartRow" placeholder="Default: 2" min="2" />
+        <div class="hint">First data row (min: 2)</div>
+        <div class="error" id="customStartRowErr"></div>
+      </div>
+      <div class="field">
+        <label>End Row <span class="optional">(optional)</span></label>
+        <input type="number" id="customEndRow" placeholder="Default: last row" min="2" />
+        <div class="hint">Last row to process</div>
+        <div class="error" id="customEndRowErr"></div>
+      </div>
+    </div>
+
     <div class="buttons">
       <button class="cancel" onclick="google.script.host.close()">Cancel</button>
       <button class="save" id="saveBtn" onclick="validateAndSave()">Save Settings</button>
     </div>
 
     <script>
-      // Prefill from injected GS template variable - zero network calls
       window.onload = function () {
         try {
           const current = JSON.parse('<?= current ?>');
@@ -64,6 +81,8 @@
           if (current.webhookUrl) document.getElementById('webhookUrl').value = current.webhookUrl;
           if (current.batchSize) document.getElementById('batchSize').value = current.batchSize;
           if (current.interval) document.getElementById('interval').value = current.interval;
+          if (current.customStartRow) document.getElementById('customStartRow').value = current.customStartRow;
+          if (current.customEndRow) document.getElementById('customEndRow').value = current.customEndRow;
         } catch(e) {}
       };
 
@@ -74,7 +93,7 @@
       }
 
       function clearErrors() {
-        ['sheetNameErr', 'webhookUrlErr', 'batchSizeErr', 'intervalErr']
+        ['sheetNameErr', 'webhookUrlErr', 'batchSizeErr', 'intervalErr', 'customStartRowErr', 'customEndRowErr']
           .forEach(id => { document.getElementById(id).style.display = 'none'; });
       }
 
@@ -86,11 +105,20 @@
         const webhookUrl = document.getElementById('webhookUrl').value.trim();
         const batchSize = parseInt(document.getElementById('batchSize').value);
         const interval = parseInt(document.getElementById('interval').value);
+        const customStartRowRaw = document.getElementById('customStartRow').value.trim();
+        const customEndRowRaw = document.getElementById('customEndRow').value.trim();
+        const customStartRow = customStartRowRaw ? parseInt(customStartRowRaw) : '';
+        const customEndRow = customEndRowRaw ? parseInt(customEndRowRaw) : '';
 
         if (!sheetName) { showError('sheetNameErr', '❌ Sheet name is required.'); valid = false; }
         if (!webhookUrl || !webhookUrl.startsWith('http')) { showError('webhookUrlErr', '❌ Enter a valid webhook URL starting with http.'); valid = false; }
         if (isNaN(batchSize) || batchSize < 1 || batchSize > 500) { showError('batchSizeErr', '❌ Enter a number between 1 and 500.'); valid = false; }
         if (isNaN(interval) || interval < 1) { showError('intervalErr', '❌ Enter a valid interval (minimum 1).'); valid = false; }
+        if (customStartRowRaw && (isNaN(customStartRow) || customStartRow < 2)) { showError('customStartRowErr', '❌ Start row must be 2 or higher.'); valid = false; }
+        if (customEndRowRaw && (isNaN(customEndRow) || customEndRow < 2)) { showError('customEndRowErr', '❌ End row must be 2 or higher.'); valid = false; }
+        if (customStartRowRaw && customEndRowRaw && customStartRow && customEndRow && customEndRow < customStartRow) {
+          showError('customEndRowErr', '❌ End row must be greater than or equal to start row.'); valid = false;
+        }
         if (!valid) return;
 
         const validIntervals = [1, 5, 10, 15, 30];
@@ -121,7 +149,7 @@
             saveBtn.textContent = 'Save Settings';
             saveBtn.classList.remove('disabled');
           })
-          .saveSettingsFromDialog(sheetName, webhookUrl, batchSize, interval);
+          .saveSettingsFromDialog(sheetName, webhookUrl, batchSize, interval, customStartRow || '', customEndRow || '');
       }
     </script>
   </body>
